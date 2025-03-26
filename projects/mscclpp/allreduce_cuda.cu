@@ -1,3 +1,4 @@
+
 #include <torch/extension.h>
 #include <vector>
 //#include <mpi.h>
@@ -11,7 +12,7 @@
 
 class AllReduceEngine {
 public:
-    AllReduceEngine(int rank, int worldSize) 
+    AllReduceEngine(int rank, int worldSize)
         : rank_(rank), worldSize_(worldSize) {
         bootstrap();
     }
@@ -19,6 +20,10 @@ public:
     ~AllReduceEngine() {
         //if (deviceChannels_) {
         //    //hipFree(deviceChannels_);
+        //
+
+
+
         //}
     }
 
@@ -31,9 +36,9 @@ public:
         int64_t split_k) {
         TORCH_CHECK(A.is_cuda(), "Input tensor must be a CUDA tensor");
         TORCH_CHECK(A.is_contiguous(), "Input tensor must be contiguous");
- 
+
         // Setup mesh connections
-        allocateCommsBuffers(D.numel() * D.element_size());
+        allocateCommsBuffers(D.numel());
         printf("Allocated input buffers\n");
         setupMeshConnections(channels_A_, comm_buff_A.get(), comm_buff_B.get(), comms_buff_bytes_);
         CUDATHROW(cudaMemcpyToSymbol(constRingChannelsA, channels_A_.data(),
@@ -47,7 +52,9 @@ public:
         printf("Setup mesh connections\n");
         startProxy();
 
+
         CUDATHROW(cudaDeviceSynchronize());
+
         skinny_gemm(A, B, D, scale_tensor, b_lanes, split_k, rank_, worldSize_, comm_buff_A.get(), comm_buff_B.get());
         CUDATHROW(cudaDeviceSynchronize());
         return D;
@@ -65,7 +72,7 @@ private:
 
         std::string ip_port = "localhost:12000";
         auto bootstrap = std::make_shared<mscclpp::TcpBootstrap>(rank_, worldSize_);
-        
+
         // Initialize with options
         //bootstrap->initialize(ip_port, options);
         //mscclpp::UniqueId id;
@@ -75,7 +82,7 @@ private:
         bootstrap->initialize("127.0.0.1:50000");
         bootstrap->barrier();
         printf("Initialized comms\n");
-        
+
         // Create communicator and wait for all processes
         communicator_ = std::make_shared<mscclpp::Communicator>(bootstrap);
         chanService_ = std::make_shared<mscclpp::ProxyService>();
@@ -86,8 +93,9 @@ private:
         comm_buff_B = mscclpp::GpuBuffer<uint8_t>(bytes).memory();
         comms_buff_bytes_ = bytes;
     }
-    
+
     void setupMeshConnections(std::vector<DeviceHandle<mscclpp::PortChannel>>& portChannels, void* send_buff, void* recv_buff, size_t buff_size) {
+
         mscclpp::Transport transport = mscclpp::Transport::CudaIpc;
         std::vector<mscclpp::NonblockingFuture<mscclpp::RegisteredMemory>> remoteRegMemories;
         std::vector<mscclpp::NonblockingFuture<std::shared_ptr<mscclpp::Connection>>> connectionFutures;
@@ -154,4 +162,4 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     py::class_<AllReduceEngine>(m, "AllReduceEngine")
         .def(py::init<int, int>())
         .def("reduce", &AllReduceEngine::reduce);
-} 
+}

@@ -1,5 +1,6 @@
 #include "./consumer.cu"
 #include "./producer.cu"
+#include <cassert>
 #include <mscclpp/concurrency_device.hpp>
 
 
@@ -10,7 +11,7 @@ __constant__ DeviceHandle<mscclpp::PortChannel> constRingChannelsB[7];
 
 __device__ mscclpp::DeviceSyncer deviceSyncer;
 
-__global__ void vectorized_reduce_inplace(__half* __restrict__ D, const __half* __restrict__ buff_a, __half* __restrict__ buff_b, int size, int rank, int world_size) {
+__global__ void vectorized_reduce_inplace(__half* __restrict__ D, const fp8* __restrict__ buff_a, fp8* __restrict__ buff_b, int size, int rank, int world_size) {
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
     int stride = gridDim.x * blockDim.x;
     using half2_t = __half2;
@@ -47,18 +48,20 @@ __global__ void vectorized_reduce_inplace(__half* __restrict__ D, const __half* 
         // The first comms iteration in the ring is performed during
         // the GEMM operation, so we can start with a reduce here
         for (int i = idx * 2; i < size; i += stride * 2) {
-            half2_t a = reinterpret_cast<half2_t*>(D)[i / 2];
+            half2_t* D_ = reinterpret_cast<half2_t*>(D);
             //const __half2* buff = step % 2 == 0 ? buff_a : buff_b;
-            half2_t b = reinterpret_cast<const half2_t*>(step % 2 == 0 ? buff_b : buff_a)[i / 2];
-            //half2_t b = reinterpret_cast<const half2_t*>(buff_a)[i / 2];
-            reinterpret_cast<half2_t*>(D)[i / 2] = __hadd2(a, b);  // In-place addition
+            fp8x2 b = reinterpret_cast<const fp8x2*>(step % 2 == 0 ? buff_b : buff_a)[i / 2];
+            half2_t hb = __half2(__hip_cvt_fp8x2_to_halfraw2(b, __HIP_E4M3_FNUZ));
+
+            asm volatile("global_atomic_pk_add_f16 %0, %1, off\n\t" : : "v"(&D_[i/2]), "v"(hb));  // In-place addition
         }
-    
+
         // Handle odd-length case (if n is odd)
-        if (idx == 0 && (size % 2) != 0) {
-            __half b = (step % 2 == 0 ? buff_b : buff_a)[size - 1];
-            D[size - 1] = __hadd(D[size - 1], b);
-        }
+        //if (idx == 0 && (size % 2) != 0) {
+        //    fp8 b = (step % 2 == 0 ? buff_b : buff_a)[size - 1];
+        //    __half hb = __half(__hip_cvt_fp8_to_halfraw(b, __HIP_E4M3_FNUZ));
+        //    D[size - 1] += hb;
+        //}
 
         deviceSyncer.sync(gridDim.x, -1);
         if (idx == 0) {
@@ -83,7 +86,7 @@ __global__ void vectorized_reduce_inplace(__half* __restrict__ D, const __half* 
 
 template <int B_LANES, int A_PRODUCERS, int B_PRODUCERS, int CONSUMERS, int QSIZE>
 void __global__ _tsr_kernel(const fp8* __restrict__ A, const fp8* __restrict__ B, half* __restrict__ D,
-                            const float* scale_tensor, const int m, const int n, const int k, const int split_k, const int rank, const int world_size, half* scratch) {
+                            const float* scale_tensor, const int m, const int n, const int k, const int split_k, const int rank, const int world_size, fp8* scratch) {
     // Initialize shared queue
     __shared__ int queue[2 * B_LANES * QSIZE];
     if (threadIdx.x < 2 * B_LANES * QSIZE) {
@@ -177,7 +180,7 @@ void __global__ _tsr_kernel(const fp8* __restrict__ A, const fp8* __restrict__ B
     if (threadIdx.x == (A_PRODUCERS + B_PRODUCERS) * WARPSIZE && blockIdx.x == 0) {
         // Send the result around the ring, only one thread needs to do this.
 
-        right.put(0, m*n*2);
+        right.put(0, m*n);
         right.signal();
         right.flush();
         left.wait();
@@ -197,8 +200,8 @@ void skinny_gemm(torch::Tensor& A, torch::Tensor& B, torch::Tensor& D, torch::Te
     half* __restrict__ D_ = (half* __restrict__)D.data_ptr();
     float* __restrict__ scale_tensor_ = (float* __restrict__)scale_tensor.data_ptr();
 
-    half* __restrict__ buff_a_ = (half* __restrict__)buff_a;
-    half* __restrict__ buff_b_ = (half* __restrict__)buff_b;
+    fp8* __restrict__ buff_a_ = (fp8* __restrict__)buff_a;
+    fp8* __restrict__ buff_b_ = (fp8* __restrict__)buff_b;
 
     // Check shape
     if (m > WARPTILE_M) {

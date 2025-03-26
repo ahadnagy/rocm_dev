@@ -13,7 +13,7 @@ find_package(mscclpp REQUIRED)
 enable_language(HIP)
 
 # Set HIP flags for conversion
-set(CMAKE_HIP_FLAGS "${CMAKE_HIP_FLAGS} --cuda-path=/opt/rocm/hip")
+set(CMAKE_HIP_FLAGS "${CMAKE_HIP_FLAGS} --cuda-path=/opt/rocm/hip -U__HIP_NO_HALF_CONVERSIONS__ -U__HIP_NO_HALF_OPERATORS__")
 
 # Add executable - note that we'll convert .cpp and .cu files to .hip
 add_executable(allreduce
@@ -38,5 +38,5 @@ target_link_libraries(allreduce
 
 # Convert CUDA syntax to HIP
 set_target_properties(allreduce PROPERTIES
-    HIP_ARCHITECTURES "gfx908;gfx90a"  # Adjust these based on your AMD GPU architecture
-) 
+    HIP_ARCHITECTURES "gfx942"  # Adjust these based on your AMD GPU architecture
+)

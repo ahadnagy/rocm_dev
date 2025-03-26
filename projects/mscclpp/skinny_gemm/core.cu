@@ -19,6 +19,7 @@
   } while (0)
 
 using fp8 = __hip_fp8_storage_t;
+using fp8x2 = __hip_fp8x2_storage_t;
 using fp8_4 = int;
 using fp8x8 = __attribute__((__vector_size__(8 * sizeof(fp8)))) fp8;
 using fp8x16 = __attribute__((__vector_size__(16 * sizeof(fp8)))) fp8;
