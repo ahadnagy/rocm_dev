@@ -11,7 +11,8 @@ __constant__ DeviceHandle<mscclpp::PortChannel> constRingChannelsB[7];
 
 __device__ mscclpp::DeviceSyncer deviceSyncer;
 
-__global__ void vectorized_reduce_inplace(__half* __restrict__ D, const fp8* __restrict__ buff_a, fp8* __restrict__ buff_b, int size, int rank, int world_size) {
+template <typename CB_T>
+__global__ void vectorized_reduce_inplace(__half* __restrict__ D, const CB_T* __restrict__ buff_a, CB_T* __restrict__ buff_b, int size, int rank, int world_size) {
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
     int stride = gridDim.x * blockDim.x;
     using half2_t = __half2;
@@ -45,15 +46,22 @@ __global__ void vectorized_reduce_inplace(__half* __restrict__ D, const fp8* __r
             }
         }
 
+        using CBx2_t = vec_t(CB_T, 2);
         // The first comms iteration in the ring is performed during
         // the GEMM operation, so we can start with a reduce here
+        half2_t* D_ = reinterpret_cast<half2_t*>(D);
+        const CBx2_t* comm_buffer = reinterpret_cast<const CBx2_t*>(step % 2 == 0 ? buff_b : buff_a);
         for (int i = idx * 2; i < size; i += stride * 2) {
-            half2_t* D_ = reinterpret_cast<half2_t*>(D);
-            //const __half2* buff = step % 2 == 0 ? buff_a : buff_b;
-            fp8x2 b = reinterpret_cast<const fp8x2*>(step % 2 == 0 ? buff_b : buff_a)[i / 2];
-            half2_t hb = __half2(__hip_cvt_fp8x2_to_halfraw2(b, __HIP_E4M3_FNUZ));
-
-            asm volatile("global_atomic_pk_add_f16 %0, %1, off\n\t" : : "v"(&D_[i/2]), "v"(hb));  // In-place addition
+            if constexpr (std::is_same_v<CB_T, half>) {
+                // If fp16 store normally
+                half2_t x = comm_buffer[i / 2];
+                asm volatile("global_atomic_pk_add_f16 %0, %1, off\n\t" : : "v"(&D_[i/2]), "v"(x));
+            }
+            if constexpr (std::is_same_v<CB_T, fp8>) {
+                // If fp8 convert to fp16 first
+                half2_t x = __half2(__hip_cvt_fp8x2_to_halfraw2(comm_buffer[i / 2], __HIP_E4M3_FNUZ));
+                asm volatile("global_atomic_pk_add_f16 %0, %1, off\n\t" : : "v"(&D_[i/2]), "v"(x));
+            }
         }
 
         // Handle odd-length case (if n is odd)
@@ -84,9 +92,9 @@ __global__ void vectorized_reduce_inplace(__half* __restrict__ D, const fp8* __r
     _tsr_kernel<BL, AP, BP, C, QS><<<grid, block, 0, stream>>>(A_, B_, D_, scale_tensor_, m, n, k, split_k, rank, world_size, buff_a_); \
     break;
 
-template <int B_LANES, int A_PRODUCERS, int B_PRODUCERS, int CONSUMERS, int QSIZE>
+template <int B_LANES, int A_PRODUCERS, int B_PRODUCERS, int CONSUMERS, int QSIZE, typename CB_T>
 void __global__ _tsr_kernel(const fp8* __restrict__ A, const fp8* __restrict__ B, half* __restrict__ D,
-                            const float* scale_tensor, const int m, const int n, const int k, const int split_k, const int rank, const int world_size, fp8* scratch) {
+                            const float* scale_tensor, const int m, const int n, const int k, const int split_k, const int rank, const int world_size, CB_T* communication_buffer) {
     // Initialize shared queue
     __shared__ int queue[2 * B_LANES * QSIZE];
     if (threadIdx.x < 2 * B_LANES * QSIZE) {
@@ -162,9 +170,9 @@ void __global__ _tsr_kernel(const fp8* __restrict__ A, const fp8* __restrict__ B
         }
         // Consumers warp
         else if (threadIdx.x < (A_PRODUCERS + B_PRODUCERS + CONSUMERS) * WARPSIZE) {
-            _tsr_consumer<CONSUMERS, B_LANES, QSIZE>(&A_buffer[0], &B_buffer[0], D + curr_n, scale_tensor[0], &queue[0],
+            _tsr_consumer<CONSUMERS, B_LANES, QSIZE, CB_T>(&A_buffer[0], &B_buffer[0], D + curr_n, scale_tensor[0], &queue[0],
                                                      index, p_state, role_id, n, dropped_rows, dropped_cols, k,
-                                                     k_blocks, scratch + curr_n);
+                                                     k_blocks, communication_buffer + curr_n);
             __syncthreads();
             if (threadIdx.x == (A_PRODUCERS + B_PRODUCERS) * WARPSIZE) {
                 // Send the result around the ring, only one thread needs to do this
@@ -180,7 +188,7 @@ void __global__ _tsr_kernel(const fp8* __restrict__ A, const fp8* __restrict__ B
     if (threadIdx.x == (A_PRODUCERS + B_PRODUCERS) * WARPSIZE && blockIdx.x == 0) {
         // Send the result around the ring, only one thread needs to do this.
 
-        right.put(0, m*n);
+        right.put(0, m * n);
         right.signal();
         right.flush();
         left.wait();
@@ -189,6 +197,7 @@ void __global__ _tsr_kernel(const fp8* __restrict__ A, const fp8* __restrict__ B
     deviceSyncer.sync(gridDim.x, -1);
 }
 
+template<typename CB_T>
 void skinny_gemm(torch::Tensor& A, torch::Tensor& B, torch::Tensor& D, torch::Tensor& scale_tensor, int64_t b_lanes,
                  int64_t split_k, const int rank, const int world_size, uint8_t* buff_a, uint8_t* buff_b) {
     const int m = A.size(0);
@@ -200,8 +209,8 @@ void skinny_gemm(torch::Tensor& A, torch::Tensor& B, torch::Tensor& D, torch::Te
     half* __restrict__ D_ = (half* __restrict__)D.data_ptr();
     float* __restrict__ scale_tensor_ = (float* __restrict__)scale_tensor.data_ptr();
 
-    fp8* __restrict__ buff_a_ = (fp8* __restrict__)buff_a;
-    fp8* __restrict__ buff_b_ = (fp8* __restrict__)buff_b;
+    CB_T* __restrict__ buff_a_ = (CB_T* __restrict__)buff_a;
+    CB_T* __restrict__ buff_b_ = (CB_T* __restrict__)buff_b;
 
     // Check shape
     if (m > WARPTILE_M) {
@@ -242,6 +251,6 @@ void skinny_gemm(torch::Tensor& A, torch::Tensor& B, torch::Tensor& D, torch::Te
     cudaStreamSynchronize(stream);
     int threads = 256;
     int blocks = (D.numel() / 2 + threads - 1) / threads;
-    vectorized_reduce_inplace<<<blocks, threads, 0, stream>>>(D_, buff_a_, buff_b_, D.numel(), rank, world_size);
+    vectorized_reduce_inplace<CB_T><<<blocks, threads, 0, stream>>>(D_, buff_a_, buff_b_, D.numel(), rank, world_size);
     cudaStreamSynchronize(stream);
 }
