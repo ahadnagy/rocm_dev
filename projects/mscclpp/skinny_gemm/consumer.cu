@@ -146,8 +146,7 @@ void __device__ _tsr_consumer(fp8* A_buffer, fp8* B_buffer, half* D, float scale
 
     // Relocate on D
     __half2* D_ = reinterpret_cast<__half2*>(D) + (out_m * n + out_n) / 2;
-    using CBx2_t = vec_t(CB_T, 2);
-    CBx2_t* communication_buffer_ = reinterpret_cast<CBx2_t*>(communication_buffer) + (out_m * n + out_n) / 2;
+    vec<CB_T, 2>* communication_buffer_ = reinterpret_cast<vec<CB_T, 2>*>(communication_buffer) + (out_m * n + out_n) / 2;
 
     // Out lane by lane
     __half2 x;

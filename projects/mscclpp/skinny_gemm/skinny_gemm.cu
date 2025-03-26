@@ -45,12 +45,10 @@ __global__ void vectorized_reduce_inplace(__half* __restrict__ D, const CB_T* __
                 right_a.signal();
             }
         }
-
-        using CBx2_t = vec_t(CB_T, 2);
         // The first comms iteration in the ring is performed during
         // the GEMM operation, so we can start with a reduce here
         half2_t* D_ = reinterpret_cast<half2_t*>(D);
-        const CBx2_t* comm_buffer = reinterpret_cast<const CBx2_t*>(step % 2 == 0 ? buff_b : buff_a);
+        const vec<CB_T, 2>* comm_buffer = reinterpret_cast<const vec<CB_T, 2>*>(step % 2 == 0 ? buff_b : buff_a);
         for (int i = idx * 2; i < size; i += stride * 2) {
             if constexpr (std::is_same_v<CB_T, half>) {
                 // If fp16 store normally

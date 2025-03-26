@@ -23,7 +23,6 @@ public:
         //
 
 
-
         //}
     }
 
@@ -37,9 +36,10 @@ public:
         TORCH_CHECK(A.is_cuda(), "Input tensor must be a CUDA tensor");
         TORCH_CHECK(A.is_contiguous(), "Input tensor must be contiguous");
 
-        using CB_T = fp8;
+        using CB_T = half;
         // Setup mesh connections
         allocateCommsBuffers(D.numel() * sizeof(CB_T));
+
 
         printf("Allocated input buffers\n");
         setupMeshConnections(channels_A_, comm_buff_A.get(), comm_buff_B.get(), comms_buff_bytes_);

@@ -1,7 +1,6 @@
 #pragma once
 
 #include <hip/hip_runtime.h>
-#include <iostream>
 
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
@@ -22,24 +21,35 @@
 using fp8 = __hip_fp8_storage_t;
 
 template <typename T, int N>
-struct vec {
+struct vec_impl {
     using type = __attribute__((__vector_size__(N * sizeof(T)))) T;
 };
 
 template <>
-struct vec<fp8, 2> {
+struct vec_impl<fp8, 2> {
     using type = __hip_fp8x2_storage_t;
 };
 
-#define vec_t(T, N) typename vec<fp8, 2>::type;
+template <>
+struct vec_impl<fp8, 4> {
+    using type = int;
+};
 
-using fp8x2 = typename vec<fp8, 2>::type;
-using fp8_4 = int;
-using fp8x8 = typename vec<fp8, 8>::type;
-using fp8x16 = __attribute__((__vector_size__(16 * sizeof(fp8)))) fp8;
-using fp8_4x2 = __attribute__((__vector_size__(2 * sizeof(int)))) int;
-using fp8_4x4 = __attribute__((__vector_size__(4 * sizeof(int)))) int;
-using f32x4 = __attribute__((__vector_size__(4 * sizeof(float)))) float;
+template <>
+struct vec_impl<half, 2> {
+    using type = __half2;
+};
+
+template <typename T, int N>
+using vec = typename vec_impl<T, N>::type;
+
+using fp8x2 = vec<fp8, 2>;
+using fp8_4 = vec<fp8, 4>;
+using fp8x8 = vec<fp8, 8>;
+using fp8x16 = vec<fp8, 16>;
+using fp8_4x2 = vec<int, 2>;
+using fp8_4x4 = vec<int, 4>;
+using f32x4 = vec<float, 4>;
 using uint8 = unsigned char;
 using uint16 = unsigned short;
 using uint32 = unsigned int;
