@@ -20,9 +20,6 @@ public:
     ~AllReduceEngine() {
         //if (deviceChannels_) {
         //    //hipFree(deviceChannels_);
-        //
-
-
         //}
     }
 
@@ -39,8 +36,6 @@ public:
         using CB_T = half;
         // Setup mesh connections
         allocateCommsBuffers(D.numel() * sizeof(CB_T));
-
-
         printf("Allocated input buffers\n");
         setupMeshConnections(channels_A_, comm_buff_A.get(), comm_buff_B.get(), comms_buff_bytes_);
         CUDATHROW(cudaMemcpyToSymbol(constRingChannelsA, channels_A_.data(),
@@ -54,9 +49,6 @@ public:
         printf("Setup mesh connections\n");
         startProxy();
         CUDATHROW(cudaDeviceSynchronize());
-
-
-
         skinny_gemm<CB_T>(A, B, D, scale_tensor, b_lanes, split_k, rank_, worldSize_, comm_buff_A.get(), comm_buff_B.get());
         CUDATHROW(cudaDeviceSynchronize());
         return D;

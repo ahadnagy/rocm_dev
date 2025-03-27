@@ -18,31 +18,20 @@
   } while (0)
 
 
-using fp8 = __hip_fp8_storage_t;
-
 template <typename T, int N>
 struct vec_impl {
     using type = __attribute__((__vector_size__(N * sizeof(T)))) T;
 };
 
-template <>
-struct vec_impl<fp8, 2> {
-    using type = __hip_fp8x2_storage_t;
-};
-
-template <>
-struct vec_impl<fp8, 4> {
-    using type = int;
-};
-
-template <>
-struct vec_impl<half, 2> {
-    using type = __half2;
-};
-
 template <typename T, int N>
 using vec = typename vec_impl<T, N>::type;
 
+template <typename T> struct vec_impl<T, 1> { using type = T; };
+template <> struct vec_impl<__hip_fp8_storage_t, 2> { using type = __hip_fp8x2_storage_t; };
+template <> struct vec_impl<__hip_fp8_storage_t, 4> { using type = int; };
+template <> struct vec_impl<half, 2> { using type = __half2; };
+
+using fp8 = __hip_fp8_storage_t;
 using fp8x2 = vec<fp8, 2>;
 using fp8_4 = vec<fp8, 4>;
 using fp8x8 = vec<fp8, 8>;
