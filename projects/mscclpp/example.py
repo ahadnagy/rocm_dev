@@ -108,6 +108,8 @@ def _benchmark_skinny_gemm(rank, world_size, m: int, n: int, k: int, split_k: in
         # Create AllReduce instance
         comms_a = torch.zeros(size=(m, n), dtype=torch.float16, device="cuda")
         comms_b = torch.zeros(size=(m, n), dtype=torch.float16, device="cuda")
+        #comms_a = torch.zeros(size=(m, n), dtype=torch.float8_e4m3fnuz, device="cuda")
+        #comms_b = torch.zeros(size=(m, n), dtype=torch.float8_e4m3fnuz, device="cuda")
         allreduce = mscclpp_allreduce.AllReduceEngine(rank, world_size, 50004, comms_a, comms_b)
 
         start_torch = torch.cuda.Event(enable_timing=True)
@@ -117,7 +119,7 @@ def _benchmark_skinny_gemm(rank, world_size, m: int, n: int, k: int, split_k: in
         torch.cuda.synchronize()
 
         start_fused.record()
-        allreduce.reduce(skinny_a, b, out, scale_tensor, split_k, b_lanes, False, False)
+        allreduce.reduce(skinny_a, b, out, scale_tensor, split_k, b_lanes, False)
         end_fused.record()
         torch.cuda.synchronize()
         print(f"Fused: {start_fused.elapsed_time(end_fused)} \n")

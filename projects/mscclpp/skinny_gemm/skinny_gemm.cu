@@ -1,6 +1,5 @@
 #include "./consumer.cu"
 #include "./producer.cu"
-#include <cassert>
 #include <mscclpp/concurrency_device.hpp>
 
 
@@ -37,7 +36,7 @@ __global__ void vectorized_reduce_inplace(__half* __restrict__ D, const CB_T* __
                 // Let's wait for the parallel transfer to complete (B->A)
                 //printf("Allreduce Rank %d: Sending data B->A to %d\n", rank, peerSendRank);
                 if(!is_capturing) {
-                    right_b.put(0, size*2);
+                    right_b.put(0, size * sizeof(CB_T));
                     right_b.signal();
                 }
 
@@ -45,7 +44,7 @@ __global__ void vectorized_reduce_inplace(__half* __restrict__ D, const CB_T* __
                 // Let's wait for the parallel transfer to complete (A->B)
                 //printf("Allreduce Rank %d: Sending data A->B to %d\n", rank, peerSendRank);
                 if(!is_capturing) {
-                    right_a.put(0, size*2);
+                    right_a.put(0, size * sizeof(CB_T));
                     right_a.signal();
                 }
             }

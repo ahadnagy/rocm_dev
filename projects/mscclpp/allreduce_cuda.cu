@@ -1,6 +1,5 @@
 
 #include <torch/extension.h>
-#include <vector>
 #include <string>
 //#include <mpi.h>
 #include <mscclpp/core.hpp>
@@ -15,17 +14,33 @@ class AllReduceEngine {
 public:
     AllReduceEngine(int rank, int worldSize,
                     int port,
-                    torch::Tensor& comms_buff_A,
-                    torch::Tensor& comms_buff_B)
-        : rank_(rank), worldSize_(worldSize), comms_buff_A_(comms_buff_A.data_ptr()), comms_buff_B_(comms_buff_B.data_ptr()) {
+                    torch::Tensor& comms_buff_A_tensor,
+                    torch::Tensor& comms_buff_B_tensor)
+        : rank_(rank), worldSize_(worldSize) {
+
+        TORCH_CHECK(comms_buff_A_tensor.is_cuda() && comms_buff_A_tensor.is_cuda(), "Communication buffers must be on CUDA device");
+
+        comms_buff_dtype = comms_buff_A_tensor.scalar_type();
+        TORCH_CHECK(comms_buff_dtype == at::ScalarType::Half || comms_buff_dtype == at::ScalarType::Float8_e4m3fnuz, "Communication buffers can be float16 or float8_e4m3fnuz only");
+        TORCH_CHECK(comms_buff_dtype == comms_buff_B_tensor.scalar_type(), "Communication buffers must use same data type");
+
+        comms_buff_bytes_ = comms_buff_A_tensor.numel() * comms_buff_A_tensor.element_size();
+        TORCH_CHECK(
+            comms_buff_dtype == comms_buff_B_tensor.scalar_type() &&
+            comms_buff_bytes_ == comms_buff_B_tensor.numel() * comms_buff_B_tensor.element_size(),
+            "Communication buffers must be identical"
+        );
+
+        comms_buff_A_ = comms_buff_A_tensor.data_ptr();
+        comms_buff_B_ = comms_buff_B_tensor.data_ptr();
+
         bootstrap(port);
         printf("Allocated input buffers\n");
-        comms_buff_bytes_ = comms_buff_A.numel() * comms_buff_A.element_size();
-        setupMeshConnections(channels_A_, comms_buff_A.data_ptr(), comms_buff_B.data_ptr(), comms_buff_bytes_);
+        setupMeshConnections(channels_A_, comms_buff_A_, comms_buff_B_, comms_buff_bytes_);
         CUDATHROW(cudaMemcpyToSymbol(constRingChannelsA, channels_A_.data(),
             sizeof(DeviceHandle<mscclpp::PortChannel>) * channels_A_.size()));
         printf("Copied channels to device\n");
-        setupMeshConnections(channels_B_, comms_buff_B.data_ptr(), comms_buff_A.data_ptr(), comms_buff_bytes_);
+        setupMeshConnections(channels_B_, comms_buff_B_, comms_buff_A_, comms_buff_bytes_);
         CUDATHROW(cudaMemcpyToSymbol(constRingChannelsB, channels_B_.data(),
             sizeof(DeviceHandle<mscclpp::PortChannel>) * channels_B_.size()));
         printf("Copied channels to device\n");
@@ -50,16 +65,12 @@ public:
         torch::Tensor& scale_tensor,
         int64_t b_lanes,
         int64_t split_k,
-        bool is_capturing,
-        bool fp8_comm_buffer = false
+        bool is_capturing
     ) {
         TORCH_CHECK(A.is_cuda(), "Input tensor must be a CUDA tensor");
         TORCH_CHECK(A.is_contiguous(), "Input tensor must be contiguous");
 
-        size_t cb_t_size = fp8_comm_buffer ? sizeof(fp8) : sizeof(half);
-        printf("Comm buffer dtype: %s\n", fp8_comm_buffer ? "fp8" : "half");
-        // Setup mesh connections
-        if (fp8_comm_buffer) {
+        if (comms_buff_dtype == at::ScalarType::Float8_e4m3fnuz) {
             skinny_gemm<fp8>(A, B, D, scale_tensor, b_lanes, split_k, rank_, worldSize_, reinterpret_cast<uint8_t *>(comms_buff_A_), reinterpret_cast<uint8_t *>(comms_buff_B_), allreduce_lock_event, is_capturing);
         } else {
             skinny_gemm<half>(A, B, D, scale_tensor, b_lanes, split_k, rank_, worldSize_, reinterpret_cast<uint8_t *>(comms_buff_A_), reinterpret_cast<uint8_t *>(comms_buff_B_), allreduce_lock_event, is_capturing);
@@ -166,6 +177,7 @@ private:
     void* comms_buff_A_;
     void* comms_buff_B_;
     size_t comms_buff_bytes_;
+    at::ScalarType comms_buff_dtype;
 
     cudaEvent_t allreduce_lock_event;
 };
