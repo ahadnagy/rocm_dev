@@ -186,7 +186,7 @@ void __global__ _tsr_kernel(const fp8* __restrict__ A, const fp8* __restrict__ B
     if (threadIdx.x == (A_PRODUCERS + B_PRODUCERS) * WARPSIZE && blockIdx.x == 0) {
         // Send the result around the ring, only one thread needs to do this.
 
-        right.put(0, m * n);
+        right.put(0, m * n * sizeof(CB_T));
         right.signal();
         right.flush();
         left.wait();

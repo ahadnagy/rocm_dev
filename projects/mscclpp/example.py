@@ -83,11 +83,11 @@ def generate_skinny_gemm_data(
         torch.manual_seed(seed)
     scale_tensor = torch.ones(size=(1,), device="cuda", dtype=torch.float32).mul(2).add(1)
     skinny_a = fp8_quantize(
-        torch.rand(size=(m, k), device="cuda", dtype=torch.float32).sub(0.5),
+        torch.ones(size=(m, k), device="cuda", dtype=torch.float32).sub(0.99),
         scale_tensor,
     )[0]
     b = fp8_quantize(
-        torch.rand(size=(n, k), device="cuda", dtype=torch.float32).sub(0.5),
+        torch.ones(size=(n, k), device="cuda", dtype=torch.float32).sub(0.99),
         scale_tensor,
     )[0].t()
     output = torch.zeros(size=(m, n), dtype=torch.float16, device="cuda")
@@ -120,7 +120,7 @@ def _benchmark_skinny_gemm(rank, world_size, m: int, n: int, k: int, split_k: in
 
         start_fused.record()
         #fused = timeit.timeit(lambda: allreduce.reduce(skinny_a, b, out, scale_tensor, split_k, b_lanes), number=1)
-        allreduce.reduce(skinny_a, b, out, scale_tensor, split_k, b_lanes)
+        allreduce.reduce(skinny_a, b, out, scale_tensor, split_k, b_lanes, False)
         end_fused.record()
         torch.cuda.synchronize()
         print(f"Fused: {start_fused.elapsed_time(end_fused)} \n")

@@ -29,13 +29,16 @@ public:
         torch::Tensor& D,
         torch::Tensor& scale_tensor,
         int64_t b_lanes,
-        int64_t split_k) {
+        int64_t split_k,
+        bool fp8_comm_buffer = false
+    ) {
         TORCH_CHECK(A.is_cuda(), "Input tensor must be a CUDA tensor");
         TORCH_CHECK(A.is_contiguous(), "Input tensor must be contiguous");
 
-        using CB_T = half;
+        size_t cb_t_size = fp8_comm_buffer ? sizeof(fp8) : sizeof(half);
+        printf("Comm buffer dtype: %s\n", fp8_comm_buffer ? "fp8" : "half");
         // Setup mesh connections
-        allocateCommsBuffers(D.numel() * sizeof(CB_T));
+        allocateCommsBuffers(D.numel() * cb_t_size);
         printf("Allocated input buffers\n");
         setupMeshConnections(channels_A_, comm_buff_A.get(), comm_buff_B.get(), comms_buff_bytes_);
         CUDATHROW(cudaMemcpyToSymbol(constRingChannelsA, channels_A_.data(),
@@ -49,7 +52,11 @@ public:
         printf("Setup mesh connections\n");
         startProxy();
         CUDATHROW(cudaDeviceSynchronize());
-        skinny_gemm<CB_T>(A, B, D, scale_tensor, b_lanes, split_k, rank_, worldSize_, comm_buff_A.get(), comm_buff_B.get());
+        if (fp8_comm_buffer) {
+            skinny_gemm<fp8>(A, B, D, scale_tensor, b_lanes, split_k, rank_, worldSize_, comm_buff_A.get(), comm_buff_B.get());
+        } else {
+            skinny_gemm<half>(A, B, D, scale_tensor, b_lanes, split_k, rank_, worldSize_, comm_buff_A.get(), comm_buff_B.get());
+        }
         CUDATHROW(cudaDeviceSynchronize());
         return D;
     }
