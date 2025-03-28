@@ -1,6 +1,7 @@
 
 #include <torch/extension.h>
 #include <vector>
+#include <string>
 //#include <mpi.h>
 #include <mscclpp/core.hpp>
 #include <mscclpp/utils.hpp>
@@ -12,9 +13,28 @@
 
 class AllReduceEngine {
 public:
-    AllReduceEngine(int rank, int worldSize)
-        : rank_(rank), worldSize_(worldSize) {
-        bootstrap();
+    AllReduceEngine(int rank, int worldSize,
+                    int port,
+                    torch::Tensor& comms_buff_A,
+                    torch::Tensor& comms_buff_B)
+        : rank_(rank), worldSize_(worldSize), comms_buff_A_(comms_buff_A.data_ptr()), comms_buff_B_(comms_buff_B.data_ptr()) {
+        bootstrap(port);
+        printf("Allocated input buffers\n");
+        comms_buff_bytes_ = comms_buff_A.numel() * comms_buff_A.element_size();
+        setupMeshConnections(channels_A_, comms_buff_A.data_ptr(), comms_buff_B.data_ptr(), comms_buff_bytes_);
+        CUDATHROW(cudaMemcpyToSymbol(constRingChannelsA, channels_A_.data(),
+            sizeof(DeviceHandle<mscclpp::PortChannel>) * channels_A_.size()));
+        printf("Copied channels to device\n");
+        setupMeshConnections(channels_B_, comms_buff_B.data_ptr(), comms_buff_A.data_ptr(), comms_buff_bytes_);
+        CUDATHROW(cudaMemcpyToSymbol(constRingChannelsB, channels_B_.data(),
+            sizeof(DeviceHandle<mscclpp::PortChannel>) * channels_B_.size()));
+        printf("Copied channels to device\n");
+
+        printf("Setup mesh connections\n");
+        startProxy();
+
+        cudaEventCreate(&allreduce_lock_event);
+        cudaEventRecord(allreduce_lock_event, at::cuda::getCurrentCUDAStream());
     }
 
     ~AllReduceEngine() {
@@ -30,6 +50,7 @@ public:
         torch::Tensor& scale_tensor,
         int64_t b_lanes,
         int64_t split_k,
+        bool is_capturing,
         bool fp8_comm_buffer = false
     ) {
         TORCH_CHECK(A.is_cuda(), "Input tensor must be a CUDA tensor");
@@ -38,31 +59,16 @@ public:
         size_t cb_t_size = fp8_comm_buffer ? sizeof(fp8) : sizeof(half);
         printf("Comm buffer dtype: %s\n", fp8_comm_buffer ? "fp8" : "half");
         // Setup mesh connections
-        allocateCommsBuffers(D.numel() * cb_t_size);
-        printf("Allocated input buffers\n");
-        setupMeshConnections(channels_A_, comm_buff_A.get(), comm_buff_B.get(), comms_buff_bytes_);
-        CUDATHROW(cudaMemcpyToSymbol(constRingChannelsA, channels_A_.data(),
-            sizeof(DeviceHandle<mscclpp::PortChannel>) * channels_A_.size()));
-        printf("Copied channels to device\n");
-        setupMeshConnections(channels_B_, comm_buff_B.get(), comm_buff_A.get(), comms_buff_bytes_);
-        CUDATHROW(cudaMemcpyToSymbol(constRingChannelsB, channels_B_.data(),
-            sizeof(DeviceHandle<mscclpp::PortChannel>) * channels_B_.size()));
-        printf("Copied channels to device\n");
-
-        printf("Setup mesh connections\n");
-        startProxy();
-        CUDATHROW(cudaDeviceSynchronize());
         if (fp8_comm_buffer) {
-            skinny_gemm<fp8>(A, B, D, scale_tensor, b_lanes, split_k, rank_, worldSize_, comm_buff_A.get(), comm_buff_B.get());
+            skinny_gemm<fp8>(A, B, D, scale_tensor, b_lanes, split_k, rank_, worldSize_, reinterpret_cast<uint8_t *>(comms_buff_A_), reinterpret_cast<uint8_t *>(comms_buff_B_), allreduce_lock_event, is_capturing);
         } else {
-            skinny_gemm<half>(A, B, D, scale_tensor, b_lanes, split_k, rank_, worldSize_, comm_buff_A.get(), comm_buff_B.get());
+            skinny_gemm<half>(A, B, D, scale_tensor, b_lanes, split_k, rank_, worldSize_, reinterpret_cast<uint8_t *>(comms_buff_A_), reinterpret_cast<uint8_t *>(comms_buff_B_), allreduce_lock_event, is_capturing);
         }
-        CUDATHROW(cudaDeviceSynchronize());
         return D;
     }
 
 private:
-    void bootstrap() {
+    void bootstrap(int port) {
         // Use longer timeout for initialization
 
         //MPI_Init(NULL, NULL);
@@ -71,7 +77,7 @@ private:
 
         printf("Rank %d: World size %d\n", rank_, worldSize_);
 
-        std::string ip_port = "localhost:12000";
+        std::string ip_port = "localhost:";
         auto bootstrap = std::make_shared<mscclpp::TcpBootstrap>(rank_, worldSize_);
 
         // Initialize with options
@@ -80,7 +86,7 @@ private:
         //if (bootstrap->getRank() == 0) id = bootstrap->createUniqueId();
         //MPI_Bcast(&id, sizeof(id), MPI_BYTE, 0, MPI_COMM_WORLD);
         //bootstrap->initialize(id);
-        bootstrap->initialize("127.0.0.1:50000");
+        bootstrap->initialize(ip_port.append(std::to_string(port)));
         bootstrap->barrier();
         printf("Initialized comms\n");
 
@@ -156,11 +162,16 @@ private:
 
     std::shared_ptr<uint8_t> comm_buff_A;
     std::shared_ptr<uint8_t> comm_buff_B;
+
+    void* comms_buff_A_;
+    void* comms_buff_B_;
     size_t comms_buff_bytes_;
+
+    cudaEvent_t allreduce_lock_event;
 };
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     py::class_<AllReduceEngine>(m, "AllReduceEngine")
-        .def(py::init<int, int>())
+        .def(py::init<int, int, int, torch::Tensor&, torch::Tensor&>())
         .def("reduce", &AllReduceEngine::reduce);
 }

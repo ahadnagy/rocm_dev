@@ -35,7 +35,7 @@ void inline __device__ consumer_smem_to_reg16(fp8* buffer, fp8x16& reg) {
 template <int CONSUMERS, int B_LANES, int QSIZE, typename CB_T>
 void __device__ _tsr_consumer(fp8* A_buffer, fp8* B_buffer, half* D, float scale, int* queue, int& index, int& p_state,
                               int& role_id, const int n, const int dropped_rows, const int dropped_cols, const int k,
-                              const int k_blocks, CB_T* communication_buffer) {
+                              const int k_blocks, CB_T* communication_buffer, int curr_n) {
     // Compute thread position
     const int thread_id = threadIdx.x % WARPSIZE;
     A_buffer += (thread_id / 2) * E_P_BANK + (threadIdx.x % 2) * 32 * E_P_BANK * 2;
