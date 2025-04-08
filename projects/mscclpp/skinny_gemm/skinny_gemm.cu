@@ -14,75 +14,78 @@ __device__ mscclpp::DeviceSyncer deviceSyncer;
 __global__ void vectorized_reduce_inplace(__half* __restrict__ D, __half* __restrict__ buff_a, __half* __restrict__ buff_b, int size, int rank, int world_size, bool is_capturing) {
     using half2_t = __half2;
     
-    // Separate communication and compute blocks
-    bool is_comm_block = (blockIdx.x == gridDim.x - 1);  // Last block handles communication
-    bool is_compute_block = !is_comm_block;
-    
-    // Ring all-reduce
-    for (int step = 0; step < world_size - 1; ++step) { 
-        if (is_compute_block) {
-            int idx = threadIdx.x + blockIdx.x * blockDim.x;
-            int stride = (gridDim.x - 1) * blockDim.x;  // Only compute blocks contribute to stride
-            
-            // The first comms iteration in the ring is performed during
-            // the GEMM operation, so we can start with a reduce here
-            for (int i = idx * 2; i < size; i += stride * 2) {
+    int thread_id = threadIdx.x;
+    int block_id = blockIdx.x;
+    int global_thread_id = thread_id + block_id * blockDim.x;
+    int threads_per_block = blockDim.x;
+    int total_threads = gridDim.x * blockDim.x;
+    int half_threads = threads_per_block / 2;
+
+    // Compute role: first half of threads
+    bool is_compute_thread = (thread_id < half_threads);
+    // Comm role: second half of threads
+    bool is_comm_thread = !is_compute_thread;
+
+    for (int step = 0; step < world_size - 1; ++step) {
+        if (is_compute_thread) {
+            int compute_threads_per_block = blockDim.x / 2;
+            int compute_thread_id = threadIdx.x;  // valid only if is_compute_thread
+        
+            int logical_compute_thread_id = blockIdx.x * compute_threads_per_block + compute_thread_id;
+            int compute_stride = gridDim.x * compute_threads_per_block;
+        
+            for (int i = logical_compute_thread_id * 2; i < size; i += compute_stride * 2) {
                 half2_t a = reinterpret_cast<half2_t*>(D)[i / 2];
                 half2_t b = reinterpret_cast<half2_t*>(step % 2 == 0 ? buff_b : buff_a)[i / 2];
-                reinterpret_cast<half2_t*>(D)[i / 2] = __hadd2(a, b);  // In-place addition
+                reinterpret_cast<half2_t*>(D)[i / 2] = __hadd2(a, b);
             }
-
-            // Handle odd-length case (if n is odd)
-            if (idx == 0 && (size % 2) != 0) {
+        
+            if (logical_compute_thread_id == 0 && (size % 8) != 0) {
                 __half b = (step % 2 == 0 ? buff_b : buff_a)[size - 1];
                 D[size - 1] = __hadd(D[size - 1], b);
             }
-
-        } else if (is_comm_block && !is_capturing) {
-            // Communication block handles all the data transfer
-            int comm_threads = blockDim.x;
-            int comm_thread_id = threadIdx.x;
-
-            int elements_per_thread = ((size + 1) / 2 + comm_threads - 1) / comm_threads;
-            int start_idx = comm_thread_id * elements_per_thread;
+        }
+        if (is_comm_thread && !is_capturing) {
+            int comm_threads_per_block = blockDim.x / 2;
+            int local_comm_thread_id = threadIdx.x - comm_threads_per_block;
+            int global_comm_thread_id = blockIdx.x * comm_threads_per_block + local_comm_thread_id;
+            int total_comm_threads = gridDim.x * comm_threads_per_block;
+        
+            int elements_per_thread = ((size + 1) / 2 + total_comm_threads - 1) / total_comm_threads;
+            int start_idx = global_comm_thread_id * elements_per_thread;
             int end_idx = min(start_idx + elements_per_thread, (size + 1) / 2);
+        
             uint64_t offset_bytes = start_idx * sizeof(half2_t);
             uint64_t chunk_bytes = (end_idx - start_idx) * sizeof(half2_t);
-
-            // Figure out peer channels for comms
+        
             int peerSendRank = (rank + 1) % world_size;
             int peerRecvRank = (rank - 1 + world_size) % world_size;
             int peerSendId = peerSendRank < rank ? peerSendRank : peerSendRank - 1;
             int peerRecvId = peerRecvRank < rank ? peerRecvRank : peerRecvRank - 1;
-
+        
             DeviceHandle<mscclpp::MemoryChannel>& left_a = constRingChannelsA[peerRecvId];
             DeviceHandle<mscclpp::MemoryChannel>& right_a = constRingChannelsA[peerSendId];
             DeviceHandle<mscclpp::MemoryChannel>& left_b = constRingChannelsB[peerRecvId];
             DeviceHandle<mscclpp::MemoryChannel>& right_b = constRingChannelsB[peerSendId];
-
+        
             if (step % 2 == 0) {
-                // B->A transfer
-                right_b.put(offset_bytes, chunk_bytes, comm_thread_id, comm_threads);
-                if (comm_thread_id == 0) {
+                right_b.put(offset_bytes, chunk_bytes, global_comm_thread_id, total_comm_threads);
+                if (global_comm_thread_id == 0) {
                     right_b.signal();
                     left_b.wait();
                 }
                 __syncthreads();
-                
-                //deviceSyncer.sync(gridDim.x, -1);
             } else {
-                // A->B transfer
-                right_a.put(offset_bytes, chunk_bytes, comm_thread_id, comm_threads);
-                if (comm_thread_id == 0) {
+                right_a.put(offset_bytes, chunk_bytes, global_comm_thread_id, total_comm_threads);
+                if (global_comm_thread_id == 0) {
                     right_a.signal();
                     left_a.wait();
                 }
                 __syncthreads();
-                
-                //deviceSyncer.sync(gridDim.x, -1);
             }
         }
-        //deviceSyncer.sync(gridDim.x, -1);
+
+        __syncthreads();  // Sync compute and comm threads before next step
     }
 }
 
@@ -237,5 +240,5 @@ void skinny_gemm(torch::Tensor& A, torch::Tensor& B, torch::Tensor& D, torch::Te
 
     int threads = 1024;
     int blocks = (D.numel() / 2 + threads - 1) / threads;
-    vectorized_reduce_inplace<<<blocks + 1, threads, 0, stream>>>(D_, buff_a_, buff_b_, D.numel(), rank, world_size, is_capturing);
+    vectorized_reduce_inplace<<<blocks, threads, 0, stream>>>(D_, buff_a_, buff_b_, D.numel(), rank, world_size, is_capturing);
 }
