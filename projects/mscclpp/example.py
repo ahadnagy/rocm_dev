@@ -93,6 +93,7 @@ def generate_skinny_gemm_data(
     output = torch.zeros(size=(m, n), dtype=torch.float16, device="cuda")
     return skinny_a, b, scale_tensor, output
 
+from time import sleep
 
 def _benchmark_skinny_gemm(rank, world_size, m: int, n: int, k: int, split_k: int, b_lanes: int):
     """Test for the skinny_gemm operation."""
@@ -102,6 +103,8 @@ def _benchmark_skinny_gemm(rank, world_size, m: int, n: int, k: int, split_k: in
 
         # Generate data
         skinny_a, b, scale_tensor, out = generate_skinny_gemm_data(m, n, k, seed=0)
+        skinny_a2, b2, scale_tensor2, out2 = generate_skinny_gemm_data(m, n, k, seed=0)
+
 
         print("out_size: ", out.shape)
 
@@ -134,7 +137,11 @@ def _benchmark_skinny_gemm(rank, world_size, m: int, n: int, k: int, split_k: in
         #print(f"Pytorch: {torch} \n")
         print(f"Pytorch: {start_torch.elapsed_time(end_torch)} \n")
         #torch.set_printoptions(profile="full")
-        print(out)
+
+        print("out", out)
+
+        allreduce.reduce(skinny_a2, b2, out2, scale_tensor2, split_k, b_lanes, False)
+        print("out2", out2)
 
     except Exception as e:
         print(f"Error on rank {rank}: {str(e)}")

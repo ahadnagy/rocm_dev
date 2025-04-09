@@ -10,6 +10,7 @@ __constant__ DeviceHandle<mscclpp::PortChannel> constRingChannelsB[7];
 
 __device__ mscclpp::DeviceSyncer deviceSyncer;
 
+
 template <typename CB_T>
 __global__ void vectorized_reduce_inplace(__half* __restrict__ D, const CB_T* __restrict__ buff_a, CB_T* __restrict__ buff_b, int size, int rank, int world_size, bool is_capturing) {
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
@@ -267,8 +268,5 @@ void skinny_gemm(torch::Tensor& A, torch::Tensor& B, torch::Tensor& D, torch::Te
     int threads = 256;
     int blocks = (D.numel() / 2 + threads - 1) / threads;
     //printf("Allreduce: sizes: %d %d %d %d %d %d\n", D.numel(), m, n, k, m*n, m*n*2);
-
     vectorized_reduce_inplace<CB_T><<<blocks, threads, 0, stream>>>(D_, buff_a_, buff_b_, D.numel(), rank, world_size, is_capturing);
-    cudaEventRecord(lock, stream);
-    cudaStreamSynchronize(stream);
 }
