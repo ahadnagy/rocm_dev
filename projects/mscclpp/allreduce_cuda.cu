@@ -16,13 +16,19 @@ public:
                     int port,
                     torch::Tensor& comms_buff_A,
                     torch::Tensor& comms_buff_B)
-        : rank_(rank), worldSize_(worldSize), comms_buff_A_(comms_buff_A.data_ptr()), comms_buff_B_(comms_buff_B.data_ptr()) {
+        : rank_(rank), worldSize_(worldSize) {
         mscclpp::Transport transport = mscclpp::Transport::CudaIpc;
         bootstrap(port);
 
         comms_buff_bytes_ = comms_buff_A.numel() * comms_buff_A.element_size();
-        registered_buff_A_ = communicator_->registerMemory(comms_buff_A.data_ptr(), comms_buff_bytes_, transport);
-        registered_buff_B_ = communicator_->registerMemory(comms_buff_B.data_ptr(), comms_buff_bytes_, transport);
+
+        hipExtMallocWithFlags((void**)&comms_buff_A_, comms_buff_bytes_, hipDeviceMallocUncached);
+        hipExtMallocWithFlags((void**)&comms_buff_B_, comms_buff_bytes_, hipDeviceMallocUncached);
+        cudaMemset(comms_buff_A_, 0, comms_buff_bytes_);
+        cudaMemset(comms_buff_B_, 0, comms_buff_bytes_);
+
+        registered_buff_A_ = communicator_->registerMemory(comms_buff_A_, comms_buff_bytes_, transport);
+        registered_buff_B_ = communicator_->registerMemory(comms_buff_B_, comms_buff_bytes_, transport);
         printf("Registered memory\n");
 
 
@@ -68,6 +74,8 @@ public:
         torch::Tensor& scale_tensor,
         int64_t b_lanes,
         int64_t split_k,
+        int nBlocks,
+        int compute_warps,
         bool is_capturing) {
         TORCH_CHECK(A.is_cuda(), "Input tensor must be a CUDA tensor");
         TORCH_CHECK(A.is_contiguous(), "Input tensor must be contiguous");
@@ -93,8 +101,9 @@ public:
         //CUDATHROW(cudaDeviceSynchronize());
         //communicator_->bootstrap()->barrier();
 
-        skinny_gemm(A, B, D, scale_tensor, b_lanes, split_k, rank_, worldSize_, reinterpret_cast<uint8_t *>(comms_buff_A_), reinterpret_cast<uint8_t *>(comms_buff_B_), allreduce_lock_event, is_capturing);
+        skinny_gemm(A, B, D, scale_tensor, b_lanes, split_k, rank_, worldSize_, reinterpret_cast<uint8_t *>(comms_buff_A_), reinterpret_cast<uint8_t *>(comms_buff_B_), allreduce_lock_event, nBlocks, compute_warps, is_capturing);
         //CUDATHROW(cudaDeviceSynchronize());
+        cudaMemset(comms_buff_A_, 0, comms_buff_bytes_);
         //communicator_->bootstrap()->barrier();
         return D;
     }
@@ -198,8 +207,8 @@ private:
     mscclpp::RegisteredMemory registered_buff_A_;
     mscclpp::RegisteredMemory registered_buff_B_;
 
-    void* comms_buff_A_;
-    void* comms_buff_B_;
+    uint8_t* comms_buff_A_;
+    uint8_t* comms_buff_B_;
     size_t comms_buff_bytes_;
 
     cudaEvent_t allreduce_lock_event;
