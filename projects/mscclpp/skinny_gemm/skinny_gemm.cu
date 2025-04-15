@@ -297,24 +297,13 @@ void __global__ _tsr_kernel(const fp8* __restrict__ A, const fp8* __restrict__ B
         __syncthreads();
         size_t tid = threadIdx.x - (A_PRODUCERS + B_PRODUCERS + CONSUMERS) * WARPSIZE;
         if (tid >= 0 && tid < COMMS) {
-            if (!is_capturing) {
-                size_t comms_threads = COMMS;
-                size_t chunk_bytes = (16*B_LANES) * sizeof(half);
-                size_t chunk_offset = 2*(curr_n + tid * n);
-                right.put(chunk_offset, chunk_bytes, 0, 1);
-            }
+            size_t comms_threads = COMMS;
+            size_t chunk_bytes = (16*B_LANES) * sizeof(half);
+            size_t chunk_offset = 2*(curr_n + tid * n);
+            right.put(chunk_offset, chunk_bytes, 0, 1);
         }
         __syncthreads();
     }
-
-    //deviceSyncer.sync(gridDim.x);
-    // if (threadIdx.x == 0 && blockIdx.x == 0) {
-    //     //printf("Sending data");
-    //     right.put(0, m*n*2, 0, 1);
-    //     right.signal();
-    //     left.wait();
-    // }
-    // deviceSyncer.sync(gridDim.x);
     __threadfence_system();
 }
 
@@ -362,18 +351,6 @@ void skinny_gemm(torch::Tensor& A, torch::Tensor& B, torch::Tensor& D, torch::Te
         default:
             break;
     }
-    // switch (b_lanes) {
-    //     case 2:
-    //         launch_tsr(2, 3, 8, 1, 8, 5);
-    //     case 3:
-    //         launch_tsr(3, 3, 5, 1, 8, 4);  // Perforamnce on MI300: 8_13312_16384:57.54
-    //     case 4:
-    //         launch_tsr(4, 2, 6, 1, 8, 3);  // Perforamnce on MI300: 8_16384_6656:29.5
-    //     case 5:
-    //         launch_tsr(5, 2, 6, 1, 8, 2);
-    //     default:
-    //         break;
-    // }
 
     int threads = 1024;
     //int blocks = (D.numel() / 2 + threads - 1) / threads;

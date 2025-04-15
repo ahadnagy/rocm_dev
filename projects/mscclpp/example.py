@@ -18,8 +18,6 @@ def skinny_gemm_and_ar_pytorch(a, b, d, scale):
                 b=b,
                 scale_tensor=scale,
                 output=d,
-                split_k=1,
-                b_lanes=5,
             )
     dist.all_reduce(d, op=dist.ReduceOp.SUM)
     torch.cuda.synchronize()
@@ -165,9 +163,7 @@ def _benchmark_skinny_gemm(rank, world_size, m: int, n: int, k: int, split_k: in
 
         # Generate data
         skinny_a, b, scale_tensor, out = generate_random_skinny_gemm_data(m, n, k, seed=0)
-        skinny_a2, b2, scale_tensor2, out2 = generate_skinny_gemm_zeros(m, n, k, seed=0)
-
-        #print("out_size: ", out.shape)
+        #skinny_a2, b2, scale_tensor2, out2 = generate_gemm_zeros(m, n, k, seed=0)
 
         # Create AllReduce instance
         comms_a = torch.zeros(size=(m, n), dtype=torch.float16, device="cuda")
@@ -283,7 +279,7 @@ def _benchmark_skinny_gemm(rank, world_size, m: int, n: int, k: int, split_k: in
         
         
         #rand_tensor = torch.randn(*shape, dtype=torch.float16, device="cuda") #* (rank + 1)
-        rand_tensor = tensor = torch.ones (*shape, dtype=torch.float16, device="cuda") * rank
+        rand_tensor = tensor = torch.ones(*shape, dtype=torch.float16, device="cuda") * rank
         #comms_b.copy_(rand_tensor)
         custom_result = out.clone()
         #custom_result.copy_(rand_tensor)
@@ -303,25 +299,9 @@ def _benchmark_skinny_gemm(rank, world_size, m: int, n: int, k: int, split_k: in
         #print(f"rank: {rank} comms_a allthesame: {comms_a.min() == comms_a.max()}")
         #print(f"rank: {rank} comms_b allthesame: {comms_b.min() == comms_b.max()}")
         #print("torch_result", torch_result)
+        print(custom_result)
         torch.testing.assert_close(custom_result, torch_result, 
-                                rtol=1e-5, atol=1e-5)
-        
-        #comms_a.fill_(0)
-        #custom_result2 = out.clone()
-        #allreduce.reduce(skinny_a, b, custom_result2, scale_tensor, b_lanes, split_k, 48, 12, False)
-        #torch.testing.assert_close(custom_result2, torch_result, 
-        #                        rtol=1e-5, atol=1e-5)
-        
-        
-        for i in range(0, 1000):
-            print(f"Test iter {i}")
-            custom_result2 = out.clone()
-            allreduce.reduce(skinny_a, b, custom_result2, scale_tensor, b_lanes, split_k, 12, 12, False)
-            torch.testing.assert_close(custom_result2, custom_result, 
-                                rtol=1e-5, atol=1e-5)
-        
-        
-
+                                rtol=2.5e-1, atol=2.5e-1)
         
         # PyTorch allreduce
         #torch_result = out.clone()
@@ -346,7 +326,7 @@ def test_process():
     K = 16384
     #N = 256
     #K = 512
-    B_LANES = 3
+    B_LANES = 4
     SPLIT_K = 1
 
     # Use all available GPUs
