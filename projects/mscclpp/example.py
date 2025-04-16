@@ -105,6 +105,7 @@ def _benchmark_skinny_gemm(rank, world_size, m: int, n: int, k: int, split_k: in
         # Generate data
         skinny_a, b, scale_tensor, out = generate_skinny_gemm_data(m, n, k, seed=0)
         skinny_a2, b2, scale_tensor2, out2 = generate_skinny_gemm_data(m, n, k, seed=0)
+        skinny_a3, b3, scale_tensor3, out3 = generate_skinny_gemm_data(m, n, k, seed=0)
 
         print("out_size: ", out.shape)
 
@@ -114,7 +115,7 @@ def _benchmark_skinny_gemm(rank, world_size, m: int, n: int, k: int, split_k: in
         allreduce = mscclpp_allreduce.AllReduceEngine(rank, world_size, 50004, comms_a, comms_b)
 
         # Perform reduction
-        allreduce.reduce(skinny_a, b, out, scale_tensor, split_k, b_lanes, False)
+        allreduce.reduce(skinny_a, b, out, scale_tensor, b_lanes, split_k, False)
         #skinny_gemm_and_ar_pytorch(skinny_a, b, out, scale_tensor)
 
         #start_torch = torch.cuda.Event(enable_timing=True)
@@ -139,11 +140,12 @@ def _benchmark_skinny_gemm(rank, world_size, m: int, n: int, k: int, split_k: in
         #print(f"Pytorch: {start_torch.elapsed_time(end_torch)} \n")
         #torch.set_printoptions(profile="full")
         print("out", out)
-        print("comms_a", comms_a)
-        print("comms_b", comms_b)
 
-        allreduce.reduce(skinny_a2, b2, out2, scale_tensor2, split_k, b_lanes, False)
+        allreduce.reduce(skinny_a2, b2, out2, scale_tensor2, b_lanes, split_k, False)
         print("out2", out2)
+        
+        allreduce.reduce(skinny_a3, b3, out3, scale_tensor3, b_lanes, split_k, False)
+        print("out2", out3)
 
     except Exception as e:
         print(f"Error on rank {rank}: {str(e)}")
@@ -158,8 +160,8 @@ def test_process():
     K = 16384
     #N = 16
     #K = 256
-    B_LANES = 5
-    SPLIT_K = 3
+    B_LANES = 4
+    SPLIT_K = 1
 
     # Use all available GPUs
     world_size = torch.cuda.device_count()
