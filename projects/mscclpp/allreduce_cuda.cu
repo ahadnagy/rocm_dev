@@ -74,13 +74,8 @@ public:
         // printf("Setup mesh connections\n");
         // startProxy();
 
-        //CUDATHROW(hipMemsetD16(reinterpret_cast<uint8_t *>(comms_buff_A_), 0, A.numel()));
-        //CUDATHROW(hipMemsetD16(reinterpret_cast<uint8_t *>(comms_buff_B_), 0, A.numel()));
-        //CUDATHROW(cudaDeviceSynchronize());
-        communicator_->bootstrap()->barrier();
-
         skinny_gemm(A, B, D, scale_tensor, b_lanes, split_k, rank_, worldSize_, reinterpret_cast<uint8_t *>(comms_buff_A_), reinterpret_cast<uint8_t *>(comms_buff_B_), allreduce_lock_event, is_capturing);
-        //CUDATHROW(cudaDeviceSynchronize());
+        CUDATHROW(hipMemsetD16(reinterpret_cast<uint8_t *>(comms_buff_A_), 0, A.numel()));
         communicator_->bootstrap()->barrier();
         return D;
     }
