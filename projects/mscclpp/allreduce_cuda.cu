@@ -124,7 +124,7 @@ private:
         //mscclpp::RegisteredMemory recvBufRegMem = communicator_->registerMemory(recv_buff, buff_size, transport);
         //mscclpp::RegisteredMemory sendBufRegMem = communicator_->registerMemory(send_buff, buff_size, transport);
         //mscclpp::RegisteredMemory bufRegMem = communicator_->registerMemory(buff, buff_size, transport);
-        
+
 
         // Connect with all other ranks
         for (int r = 0; r < worldSize_; ++r) {

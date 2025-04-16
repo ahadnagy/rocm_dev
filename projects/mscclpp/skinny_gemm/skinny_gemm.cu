@@ -83,6 +83,11 @@ __global__ void vectorized_reduce_inplace(__half* __restrict__ D, __half* __rest
         }
         deviceSyncer.sync(gridDim.x, -1);
      }
+
+     // Reset buffer A to ensure we do not accumulate between allreduce runs
+     for (int i = idx * 2; i < size; i += stride * 2) {
+         reinterpret_cast<int32_t*>(buff_a)[i / 2] = 0;
+     }
 }
 
 #define launch_tsr(BL, AP, BP, C, QS)                                                                        \
